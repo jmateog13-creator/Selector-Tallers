@@ -41,11 +41,11 @@ function repartir(alumnes: Alumne[], config: Config): ResultatTaller[] {
 
       if (actuals >= maxCupo) return { taller, score: -Infinity }
 
-      // Preferència (opció 1 té molt pes, 2 menys, 3 menys)
+      // Preferència: 1a opció val 3×, 2a val 2×, 3a val 1×
       const pos = tries.indexOf(taller)
       let score = 0
       if (pos !== -1) {
-        score += 1000 - (pos * 100)
+        score += (3 - pos) * 500  // 1500 / 1000 / 500
       }
 
       score += actuals < cupoObjectiu
@@ -64,7 +64,9 @@ function repartir(alumnes: Alumne[], config: Config): ResultatTaller[] {
       triat = tallers.sort((a, b) => assignats[a].length - assignats[b].length)[0]
     }
 
-    assignats[triat].push({ ...alumne, tallerAssignat: triat, satisfet: tries.includes(triat) })
+    const posObtinguda = tries.indexOf(triat)
+    const opcioObtinguda = posObtinguda === 0 ? 1 : posObtinguda === 1 ? 2 : posObtinguda === 2 ? 3 : null
+    assignats[triat].push({ ...alumne, tallerAssignat: triat, satisfet: tries.includes(triat), opcioObtinguda })
   }
 
   const tallersBuits = tallers.filter(t => assignats[t].length < minCupo)
@@ -78,7 +80,8 @@ function repartir(alumnes: Alumne[], config: Config): ResultatTaller[] {
         const idx = assignats[src].findIndex(a => a.tries.includes(dest))
         if (idx !== -1) {
           const alumne = assignats[src].splice(idx, 1)[0]
-          assignats[dest].push({ ...alumne, tallerAssignat: dest, satisfet: true })
+          const posObt = alumne.tries.indexOf(dest)
+          assignats[dest].push({ ...alumne, tallerAssignat: dest, satisfet: true, opcioObtinguda: posObt === 0 ? 1 : posObt === 1 ? 2 : 3 })
           mogut = true
           break
         }
@@ -88,7 +91,9 @@ function repartir(alumnes: Alumne[], config: Config): ResultatTaller[] {
           .sort((a, b) => assignats[b].length - assignats[a].length)[0]
         if (!src || assignats[src].length === 0) break
         const alumne = assignats[src].pop()!
-        assignats[dest].push({ ...alumne, tallerAssignat: dest, satisfet: alumne.tries.includes(dest) })
+        const posObt2 = alumne.tries.indexOf(dest)
+        const opcioObt2 = posObt2 === 0 ? 1 : posObt2 === 1 ? 2 : posObt2 === 2 ? 3 : null
+        assignats[dest].push({ ...alumne, tallerAssignat: dest, satisfet: alumne.tries.includes(dest), opcioObtinguda: opcioObt2 })
       }
     }
   }
@@ -553,7 +558,9 @@ function ResultsStep({ resultats, alumnesTotal: _alumnesTotal, config: _config, 
                     <li key={i} className={a.satisfet ? '' : 'no-satisfet'}>
                       <span className="alumne-nom">{a.nom}</span>
                       <span className="alumne-meta">{a.classe}</span>
-                      {!a.satisfet && <span className="badge-no">no triat</span>}
+                      <span className={`badge-opcio badge-opcio-${a.opcioObtinguda ?? 'cap'}`}>
+                        {a.opcioObtinguda === 1 ? '1a' : a.opcioObtinguda === 2 ? '2a' : a.opcioObtinguda === 3 ? '3a' : '✗'}
+                      </span>
                     </li>
                   ))}
                 </ul>
