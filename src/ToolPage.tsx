@@ -15,6 +15,24 @@ interface Props {
   onBack: () => void
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+const normNom = (s: string) =>
+  s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim()
+
+const matchKey = (nom: string) => normNom(nom).split(' ').slice(0, 2).join(' ')
+
+const parseCurs = (val: string): { curs: string; classe: string } => {
+  const v = val.trim()
+  const matchFull = v.match(/^(\d+[rnstèa°º]*)[^\w]*(?:d['']?eso|eso)?[^\w]*([a-zA-Z])$/i)
+  if (matchFull) {
+    const any = matchFull[1].replace(/[°º]/g, 'r')
+    const lletra = matchFull[2].toUpperCase()
+    return { curs: any, classe: `${any}${lletra}` }
+  }
+  return { curs: v, classe: v }
+}
+
 // ── Algorisme de repartició ─────────────────────────────────────────────────
 
 function repartir(alumnes: Alumne[], config: Config): ResultatTaller[] {
@@ -112,7 +130,10 @@ export default function ToolPage({ onBack }: Props) {
   const [config, setConfig] = useState<Config>({ cupoObjectiu: 8, margeTolerancia: 3, pesCompanys: 5 })
   const [resultats, setResultats] = useState<ResultatTaller[]>([])
   const [cursSeleccionat, setCursSeleccionat] = useState('tots')
+  const [llistaCompleta, setLlistaCompleta] = useState<Alumne[]>([])
+  const [listaNom, setListaNom] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const listaRef = useRef<HTMLInputElement>(null)
 
   const parseFile = useCallback((file: File) => {
     setError(null)
@@ -135,7 +156,6 @@ export default function ToolPage({ onBack }: Props) {
         const cols = Object.keys(rows[0])
         const find = (candidates: string[]) => cols.find(c => candidates.some(cand => norm(c).includes(norm(cand)))) ?? null
 
-        // Detecció flexible de columnes — inclou format Google Forms
         const colNom    = find(['nom', 'nombre', 'name', 'alumne'])
         const colCognom = find(['cognom', 'apellido', 'surname', 'cognoms'])
         const colCurs   = find(['quincurs', 'curs', 'curso', 'year', 'any', 'course'])
@@ -147,20 +167,6 @@ export default function ToolPage({ onBack }: Props) {
         if (!colNom)  { setError("No s'ha trobat la columna de noms. Comprova que existeix una columna 'Nom'."); return }
         if (!colCurs && !colClasse) { setError("No s'ha trobat la columna de curs/classe ('Quin curs fas?' o 'Curs')."); return }
         if (!colT1 || !colT2 || !colT3) { setError("No s'han trobat les columnes d'opcions ('Opció 1', 'Opció 2', 'Opció 3')."); return }
-
-        // Extreu curs i classe de "2n d'ESO B" → curs="2n", classe="2nB"
-        const parseCurs = (val: string): { curs: string; classe: string } => {
-          const v = val.trim()
-          // Format "Xè/Xr/Xn d'ESO Y" o "Xr ESO Y" o "Xr Y"
-          const matchFull = v.match(/^(\d+[rnstèa°º]*)[^\w]*(?:d['']?eso|eso)?[^\w]*([a-zA-Z])$/i)
-          if (matchFull) {
-            const any = matchFull[1].replace(/[°º]/g, 'r')
-            const lletra = matchFull[2].toUpperCase()
-            return { curs: any, classe: `${any}${lletra}` }
-          }
-          // Fallback: retornem el valor sencer com a classe
-          return { curs: v, classe: v }
-        }
 
         const parsed: Alumne[] = rows
           .filter(r => r[colNom!]?.trim())
@@ -174,7 +180,6 @@ export default function ToolPage({ onBack }: Props) {
               ? { curs: r[colClasse].trim(), classe: r[colClasse].trim() }
               : parseCurs(cursRaw)
 
-            // Deduplicar opcions repetides (ex: Henna, Henna, Henna → [Henna])
             const tries = [...new Set(
               [r[colT1!].trim(), r[colT2!].trim(), r[colT3!].trim()].filter(Boolean)
             )]
@@ -189,6 +194,29 @@ export default function ToolPage({ onBack }: Props) {
       } catch { setError('Error llegint el fitxer. Assegura que és un Excel vàlid.') }
     }
     reader.readAsArrayBuffer(file)
+  }, [])
+
+  const parseLlista = useCallback((file: File) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const text = e.target!.result as string
+      const lines = text.split(/\r?\n/).filter(l => l.trim())
+      const parsed: Alumne[] = []
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split('\t')
+        if (cols.length < 3) continue
+        const grupRaw = cols[0].trim()
+        const cognoms = cols[1].trim()
+        const nom = cols[2].trim()
+        if (!nom) continue
+        const nomComplet = `${nom} ${cognoms}`.trim()
+        const { curs, classe } = parseCurs(grupRaw)
+        parsed.push({ nom: nomComplet, curs, classe, tries: [] })
+      }
+      setLlistaCompleta(parsed)
+      setListaNom(file.name)
+    }
+    reader.readAsText(file, 'utf-8')
   }, [])
 
   const onDrop = useCallback((e: React.DragEvent) => {
@@ -270,6 +298,25 @@ export default function ToolPage({ onBack }: Props) {
           <strong>Format esperat:</strong> una fila per alumne amb les columnes&nbsp;
           {['Nom','Curs','Classe','Taller 1','Taller 2','Taller 3'].map(c => <span key={c} className="col-badge">{c}</span>)}
         </div>
+
+        {/* Llista completa opcional */}
+        <div className="llista-upload-section">
+          <div className="llista-upload-header">
+            <span className="llista-upload-label">Llista completa d'alumnes <span className="optional-tag">opcional</span></span>
+            <span className="llista-upload-hint">Puja el .txt per detectar qui no ha respost el formulari</span>
+          </div>
+          <div
+            className={`dropzone-small ${listaNom ? 'done' : ''}`}
+            onClick={() => listaRef.current?.click()}
+          >
+            <input ref={listaRef} type="file" accept=".txt"
+              style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) parseLlista(f) }} />
+            {listaNom
+              ? <><span className="dropzone-small-icon">✅</span> <span>{listaNom} · {llistaCompleta.length} alumnes</span></>
+              : <><span className="dropzone-small-icon">📋</span> <span>Arrossega o fes clic · .txt</span></>
+            }
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -291,7 +338,6 @@ export default function ToolPage({ onBack }: Props) {
             <button className="btn-ghost" onClick={() => { setAlumnes([]); setFileName(''); setStep('upload') }}>Canviar fitxer</button>
           </div>
 
-          {/* Selector de curs — defineix amb qui es treballa */}
           <div className="curs-filter-section">
             <span className="curs-filter-label">Selecciona el curs a repartir:</span>
             <div className="curs-filter">
@@ -306,7 +352,6 @@ export default function ToolPage({ onBack }: Props) {
             </div>
           </div>
 
-          {/* Resum del que es processarà */}
           <div className="preview-scope">
             {cursSeleccionat === 'tots'
               ? <><strong>{alumnes.length} alumnes</strong> de tots els cursos · {tallers.length} tallers</>
@@ -358,7 +403,6 @@ export default function ToolPage({ onBack }: Props) {
           </div>
 
           <div className="config-cards">
-            {/* Cupo */}
             <div className="config-card">
               <div className="config-card-icon">👥</div>
               <h3>Alumnes per taller <span className="per-curs-tag">per curs</span></h3>
@@ -380,7 +424,6 @@ export default function ToolPage({ onBack }: Props) {
               </div>
             </div>
 
-            {/* Marge */}
             <div className="config-card">
               <div className="config-card-icon">↔️</div>
               <h3>Marge de tolerància</h3>
@@ -392,7 +435,6 @@ export default function ToolPage({ onBack }: Props) {
               </div>
             </div>
 
-            {/* Slider companys */}
             <div className="config-card config-card-full">
               <div className="config-card-icon">👫</div>
               <h3>Pes dels companys de classe</h3>
@@ -428,8 +470,13 @@ export default function ToolPage({ onBack }: Props) {
 
   // ── RESULTS ──
   if (step === 'results') {
+    const llistaActiva = llistaCompleta.filter(a =>
+      cursSeleccionat === 'tots' ? true : a.curs === cursSeleccionat
+    )
     return <ResultsStep
       resultats={resultats}
+      setResultats={setResultats}
+      llistaCompleta={llistaActiva}
       alumnesTotal={alumnes.length}
       config={config}
       fileName={fileName}
@@ -444,8 +491,10 @@ export default function ToolPage({ onBack }: Props) {
 
 // ── ResultsStep ─────────────────────────────────────────────────────────────
 
-function ResultsStep({ resultats, alumnesTotal: _alumnesTotal, config: _config, fileName, onRecalcular, onBack, topbar }: {
+function ResultsStep({ resultats, setResultats, llistaCompleta, alumnesTotal: _alumnesTotal, config: _config, fileName, onRecalcular, onBack, topbar }: {
   resultats: ResultatTaller[]
+  setResultats: React.Dispatch<React.SetStateAction<ResultatTaller[]>>
+  llistaCompleta: Alumne[]
   alumnesTotal: number
   config: Config
   fileName: string
@@ -454,6 +503,8 @@ function ResultsStep({ resultats, alumnesTotal: _alumnesTotal, config: _config, 
   topbar: React.ReactNode
 }) {
   const [cursFiltrat, setCursFiltrat] = useState<string>('tots')
+  const [draggingAlumne, setDraggingAlumne] = useState<Alumne | null>(null)
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
 
   const cursos = [...new Set(resultats.flatMap(r => r.alumnes.map(a => a.curs)))].sort()
 
@@ -463,6 +514,25 @@ function ResultsStep({ resultats, alumnesTotal: _alumnesTotal, config: _config, 
 
   const totalSatisfets = alumnesFiltrats.filter(a => a.satisfet).length
   const pctSatisfets   = alumnesFiltrats.length > 0 ? Math.round((totalSatisfets / alumnesFiltrats.length) * 100) : 0
+
+  // Alumnes que no han respost (de la llista completa, no apareixen als resultats)
+  const assignatsKeys = new Set(resultats.flatMap(r => r.alumnes).map(a => matchKey(a.nom)))
+  const noResponents = llistaCompleta.filter(a => !assignatsKeys.has(matchKey(a.nom)))
+
+  const handleDrop = (tallerNom: string) => {
+    if (!draggingAlumne) return
+    const nouvAlumne: ResultatAlumne = {
+      ...draggingAlumne,
+      tallerAssignat: tallerNom,
+      satisfet: false,
+      opcioObtinguda: null,
+    }
+    setResultats(prev => prev.map(t =>
+      t.nom === tallerNom ? { ...t, alumnes: [...t.alumnes, nouvAlumne] } : t
+    ))
+    setDraggingAlumne(null)
+    setDropTarget(null)
+  }
 
   const exportar = () => {
     const wb = XLSX.utils.book_new()
@@ -475,10 +545,23 @@ function ResultsStep({ resultats, alumnesTotal: _alumnesTotal, config: _config, 
         Curs: a.curs,
         Classe: a.classe,
         'Taller assignat': a.tallerAssignat,
+        'Opció obtinguda': a.opcioObtinguda ? `${a.opcioObtinguda}a` : 'Manual/Cap',
         'Era una opció triada': a.satisfet ? 'Sí' : 'No',
       }))
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tots), 'Repartició')
 
+    if (noResponents.length > 0) {
+      const noResp = noResponents.map(a => ({
+        Nom: a.nom,
+        Curs: a.curs,
+        Classe: a.classe,
+        'Taller assignat': '— sense assignar —',
+        'Opció obtinguda': 'No ha respost',
+        'Era una opció triada': 'No',
+      }))
+      tots.push(...noResp)
+    }
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tots), 'Repartició')
     XLSX.writeFile(wb, `reparticio_${fileName}`)
   }
 
@@ -487,7 +570,7 @@ function ResultsStep({ resultats, alumnesTotal: _alumnesTotal, config: _config, 
       {topbar}
       <div className="results-container">
 
-        {/* Filtre per curs — prominent, primer element */}
+        {/* Filtre per curs */}
         <div className="curs-filter-section">
           <span className="curs-filter-label">Filtra per curs:</span>
           <div className="curs-filter">
@@ -533,33 +616,68 @@ function ResultsStep({ resultats, alumnesTotal: _alumnesTotal, config: _config, 
           </div>
         </div>
 
+        {/* Panel d'alumnes sense resposta */}
+        {noResponents.length > 0 && (
+          <div className="no-resp-panel">
+            <div className="no-resp-header">
+              <span className="no-resp-title">⚠️ No han respost el formulari</span>
+              <span className="no-resp-count">{noResponents.length} alumnes</span>
+              <span className="no-resp-hint">Arrossega'ls fins al taller que vols assignar-los</span>
+            </div>
+            <div className="no-resp-list">
+              {noResponents.map((a, i) => (
+                <div
+                  key={i}
+                  className="no-resp-chip"
+                  draggable
+                  onDragStart={() => setDraggingAlumne(a)}
+                  onDragEnd={() => { setDraggingAlumne(null); setDropTarget(null) }}
+                >
+                  <span className="no-resp-chip-nom">{a.nom}</span>
+                  <span className="no-resp-chip-cls">{a.classe}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Targetes per taller */}
         <div className="tallers-grid">
           {resultats.map(taller => {
-            const alumnesFiltrats = cursFiltrat === 'tots'
+            const alumnesCard = cursFiltrat === 'tots'
               ? taller.alumnes
               : taller.alumnes.filter(a => a.curs === cursFiltrat)
-            if (alumnesFiltrats.length === 0 && cursFiltrat !== 'tots') return null
+            if (alumnesCard.length === 0 && cursFiltrat !== 'tots') return null
             const satisfets = taller.alumnes.filter(a => a.satisfet).length
+            const isTarget = dropTarget === taller.nom
             return (
-              <div key={taller.nom} className="taller-card">
+              <div
+                key={taller.nom}
+                className={`taller-card ${isTarget ? 'drop-target' : ''} ${draggingAlumne ? 'droppable' : ''}`}
+                onDragOver={draggingAlumne ? (e) => { e.preventDefault(); setDropTarget(taller.nom) } : undefined}
+                onDragLeave={() => setDropTarget(null)}
+                onDrop={() => handleDrop(taller.nom)}
+              >
                 <div className="taller-card-header">
                   <h3>{taller.nom}</h3>
                   <span className="taller-count">{taller.alumnes.length} alumnes</span>
                 </div>
                 <div className="taller-satisfets">
                   <div className="satisfets-bar">
-                    <div className="satisfets-fill" style={{ width: `${Math.round(satisfets / taller.alumnes.length * 100)}%` }} />
+                    <div className="satisfets-fill" style={{ width: `${taller.alumnes.length > 0 ? Math.round(satisfets / taller.alumnes.length * 100) : 0}%` }} />
                   </div>
-                  <span className="satisfets-pct">{Math.round(satisfets / taller.alumnes.length * 100)}% satisfets</span>
+                  <span className="satisfets-pct">{taller.alumnes.length > 0 ? Math.round(satisfets / taller.alumnes.length * 100) : 0}% satisfets</span>
                 </div>
+                {draggingAlumne && (
+                  <div className="drop-hint">Deixa anar aquí</div>
+                )}
                 <ul className="alumnes-list">
-                  {alumnesFiltrats.map((a, i) => (
+                  {alumnesCard.map((a, i) => (
                     <li key={i} className={a.satisfet ? '' : 'no-satisfet'}>
                       <span className="alumne-nom">{a.nom}</span>
                       <span className="alumne-meta">{a.classe}</span>
                       <span className={`badge-opcio badge-opcio-${a.opcioObtinguda ?? 'cap'}`}>
-                        {a.opcioObtinguda === 1 ? '1a' : a.opcioObtinguda === 2 ? '2a' : a.opcioObtinguda === 3 ? '3a' : '✗'}
+                        {a.opcioObtinguda === 1 ? '1a' : a.opcioObtinguda === 2 ? '2a' : a.opcioObtinguda === 3 ? '3a' : a.opcioObtinguda === null && !a.satisfet ? '✗' : 'man'}
                       </span>
                     </li>
                   ))}
